@@ -184,6 +184,22 @@ RUBRIC_CRITERIA: Dict[str, List[Dict]] = {
     ]
 }
 
+JUDGE_SYSTEM_PROMPT = """You are an objective evaluator assessing compression quality in AI agent conversations.
+
+Given a criterion, a probe question, a compressed context, and a model response, score how well the response satisfies the criterion.
+
+Output your evaluation in exactly this format:
+Score: <integer 0-5>
+Reasoning: <one sentence explaining the score>
+
+Scoring scale:
+0 - Completely fails the criterion
+1 - Major gaps or critical omissions
+2 - Partial but insufficient
+3 - Adequate with minor gaps
+4 - Good with only trivial gaps
+5 - Excellent, fully satisfies the criterion"""
+
 
 class ProbeGenerator:
     """Generate typed probes from conversation history.
@@ -482,6 +498,50 @@ class CompressionEvaluator:
 
         return CriterionResult(
             criterion_id=criterion["id"],
+            score=score,
+            reasoning=reasoning
+        )
+
+    def _format_judge_input(self,
+                            criterion: Dict,
+                            probe: Probe,
+                            response: str,
+                            context: str) -> str:
+        """Format inputs for the LLM judge prompt."""
+        parts = [
+            f"Criterion ID: {criterion['id']}",
+            f"Evaluation question: {criterion['question']}",
+            "",
+            f"Probe question: {probe.question}",
+        ]
+        if probe.ground_truth:
+            parts.append(f"Expected ground truth: {probe.ground_truth}")
+        parts.extend([
+            "",
+            "Compressed context provided to the model:",
+            context[:2000],
+            "",
+            "Model response:",
+            response,
+        ])
+        return "\n".join(parts)
+
+    def _parse_judge_output(self, result, criterion_id: str) -> CriterionResult:
+        """Parse LLM judge API response into a CriterionResult."""
+        text = result.choices[0].message.content
+
+        score = 3.0
+        score_match = re.search(r"Score:\s*(\d+(?:\.\d+)?)", text)
+        if score_match:
+            score = min(5.0, max(0.0, float(score_match.group(1))))
+
+        reasoning = ""
+        reasoning_match = re.search(r"Reasoning:\s*(.+)", text, re.DOTALL)
+        if reasoning_match:
+            reasoning = reasoning_match.group(1).strip()
+
+        return CriterionResult(
+            criterion_id=criterion_id,
             score=score,
             reasoning=reasoning
         )
